@@ -957,11 +957,12 @@ return view.extend({
 		};
 
 		// iface
-		o = s.taboption('main', widgets.DeviceSelect,
-			'iface', _('Device'),
-			_('Network device for Internet access. If not specified, the default device is used.')
+		o = s.taboption('main', widgets.NetworkSelect,
+			'iface', _('Interface'),
+			_('Network interface for Internet access. Its current device is used, and with mwan3 the checks go out through this interface like mwan3 tracking does. If not specified, the default route is used.')
 		);
-		o.noaliases = true;
+		o.nocreate  = true;
+		o.multiple  = false;
 		o.modalonly = true;
 
 		// interval_up

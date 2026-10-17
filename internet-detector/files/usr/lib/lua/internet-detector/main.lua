@@ -126,9 +126,45 @@ function InternetDetector:loadInstanceConfig(instance)
 		end
 		self.serviceConfig.instance    = instance
 		self.serviceConfig.instanceNum = t[".index"]
+		-- "iface" may name a network interface (e.g. wan1, jio) instead of a device.
+		-- Its current L3 device is looked up before every check (resolveIface), and when mwan3 is
+		-- installed the checks carry mwan3's default-routing mark like `mwan3 use` does.
+		local ifc = self.serviceConfig.iface
+		if type(ifc) == "string" and ifc:match("^[%w_]+$") and uciCursor:get("network", ifc) == "interface" then
+			self.serviceConfig.iface_network = ifc
+			self.serviceConfig.iface         = nil
+			local mask = uciCursor:get("mwan3", "globals", "mmx_mask")
+			if mask and unistd.access("/usr/sbin/mwan3") == 0 then
+				self.serviceConfig.fwmark = tonumber(mask)
+			end
+		end
 		return true
 	end
 	return false
+end
+
+local function mwanUse(cfg)
+	-- run a command through `mwan3 use <interface>` (device, source IP and mwan3's
+	-- default-routing mark), like mwan3's own tracking; otherwise mwan3 policy routing hijacks it.
+	if cfg.iface_network and cfg.fwmark then
+		return "mwan3 use " .. cfg.iface_network .. " "
+	end
+	return ""
+end
+
+-- current L3 device of the configured network interface (its own name while it is down,
+-- so binding fails and the instance reports Disconnected).
+function InternetDetector:resolveIface()
+	local net = self.serviceConfig.iface_network
+	if not net then
+		return
+	end
+	local fh  = io.popen("ubus call network.interface." .. net .. " status 2>/dev/null")
+	local out = fh and fh:read("*a") or ""
+	if fh then
+		fh:close()
+	end
+	self.serviceConfig.iface = out:match('"l3_device"%s*:%s*"([^"]+)"') or net
 end
 
 function InternetDetector:writeValueToFile(filePath, str)
@@ -247,7 +283,7 @@ function InternetDetector:parseUrls()
 end
 
 function InternetDetector:pingHost(host)
-	local ping = string.format(
+	local ping = mwanUse(self.serviceConfig) .. string.format(
 		"%s %s -W %d -s %d%s %s > /dev/null 2>&1",
 		self.pingCmd,
 		self.pingParams,
@@ -298,6 +334,10 @@ function InternetDetector:TCPConnectionToHost(host, port)
 					return retCode
 				end
 			end
+			-- mwan3's default-routing mark (SO_MARK = 36), as `mwan3 use` sets it.
+			if self.serviceConfig.fwmark then
+				socket.setsockopt(sock, socket.SOL_SOCKET, 36, self.serviceConfig.fwmark)
+			end
 
 			local success = socket.connect(sock, saTable[1])
 
@@ -343,7 +383,7 @@ end
 
 function InternetDetector:httpRequest(url)
 	local retCode = 1, data
-	local curl = string.format(
+	local curl = mwanUse(self.serviceConfig) .. string.format(
 		'%s%s%s --connect-timeout %s %s "%s"; printf "\n$?";',
 		self.curlExec,
 		self.serviceConfig.iface and (" --interface " .. self.serviceConfig.iface) or "",
@@ -466,6 +506,7 @@ function InternetDetector:mainLoop()
 		inetChecked = false
 
 		if checking then
+			self:resolveIface()
 			local newStatus = 1
 			if hostNum <= #self.parsedHosts then
 				if attempt <= self.serviceConfig.connection_attempts then

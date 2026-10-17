@@ -206,6 +206,10 @@ function Module:sendUDPMessage(message, server, port)
 					return retCode
 				end
 			end
+			-- mwan3's default-routing mark (SO_MARK = 36), as `mwan3 use` sets it.
+			if self.config.serviceConfig.fwmark then
+				socket.setsockopt(sock, socket.SOL_SOCKET, 36, self.config.serviceConfig.fwmark)
+			end
 
 			local ok, errMsg, errNum = socket.sendto(sock, message, saTable[1])
 
@@ -356,7 +360,8 @@ end
 
 function Module:httpRequest(url)
 	local retCode = 1, data
-	local curl    = string.format(
+	local cfg     = self.config.serviceConfig
+	local curl    = ((cfg.iface_network and cfg.fwmark) and ("mwan3 use " .. cfg.iface_network .. " ") or "") .. string.format(
 		'%s%s%s --connect-timeout %s %s "%s"; printf "\n$?";',
 		self.curlExec,
 		self.config.serviceConfig.iface and (" --interface " .. self.config.serviceConfig.iface) or "",
